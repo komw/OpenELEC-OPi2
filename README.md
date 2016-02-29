@@ -1,17 +1,6 @@
-#Orange Pi 2 development
+#Orange Pi 2 development - libvdpau version
 
-**This is unofficial and should be usable, however expect bugs**
-
-**Feel free to contribute!**
-
-**Current Status**
-* video is HW decoded
-* direct rendering
-* HW deinterlacing
-* WMV1, WMV2, VP6 and VP9 codecs, although supported by CedarX, are SW decoded (nothing can be done to improve this)
-* taking screenshots doesn't work
-* VSync is commented out, because of big frame drop (needs some code reorganization)
-* used boot time resolution (can be changed via script.bin or kernel parameters)
+**This is unofficial and deeply under development**
 
 Any help appreciated via pull requests or [Orange Pi forum](http://www.orangepi.org/orangepibbsen/forum.php?mod=viewthread&tid=648)
 
