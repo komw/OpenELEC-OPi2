@@ -1,0 +1,72 @@
+diff -Nur a/device.c b/device.c
+--- a/device.c	2016-02-16 14:12:22.000000000 +0100
++++ b/device.c	2016-03-01 18:59:35.072517792 +0100
+@@ -35,13 +35,12 @@
+ 	if (!dev)
+ 		return VDP_STATUS_RESOURCES;
+ 
+-	dev->display = XOpenDisplay(XDisplayString(display));
++	dev->display = NULL;
+ 	dev->screen = screen;
+ 
+ 	dev->cedrus = cedrus_open();
+ 	if (!dev->cedrus)
+ 	{
+-		XCloseDisplay(dev->display);
+ 		handle_destroy(*device);
+ 		return VDP_STATUS_ERROR;
+ 	}
+@@ -72,7 +71,6 @@
+ 	if (dev->osd_enabled)
+ 		close(dev->g2d_fd);
+ 	cedrus_close(dev->cedrus);
+-	XCloseDisplay(dev->display);
+ 
+ 	handle_destroy(device);
+ 
+diff -Nur a/Makefile b/Makefile
+--- a/Makefile	2016-02-16 14:12:22.000000000 +0100
++++ b/Makefile	2016-03-01 19:21:47.244734210 +0100
+@@ -5,7 +5,7 @@
+ 	sunxi_disp2.c sunxi_disp1_5.c
+ CFLAGS ?= -Wall -O3
+ LDFLAGS ?=
+-LIBS = -lrt -lm -lX11 -lpthread -lcedrus
++LIBS = -lrt -lm -lpthread -lcedrus
+ CC ?= gcc
+ 
+ DEP_CFLAGS = -MD -MP -MQ $@
+diff -Nur a/presentation_queue.c b/presentation_queue.c
+--- a/presentation_queue.c	2016-02-16 14:12:22.000000000 +0100
++++ b/presentation_queue.c	2016-03-01 19:04:51.876704579 +0100
+@@ -53,7 +53,6 @@
+ 		return VDP_STATUS_RESOURCES;
+ 
+ 	qt->drawable = drawable;
+-	XSetWindowBackground(dev->display, drawable, 0x000102);
+ 
+ 	qt->disp = sunxi_disp_open(dev->osd_enabled);
+ 
+@@ -182,10 +181,7 @@
+ 	if (earliest_presentation_time != 0)
+ 		VDPAU_DBG_ONCE("Presentation time not supported");
+ 
+-	Window c;
+-	int x,y;
+-	XTranslateCoordinates(q->device->display, q->target->drawable, RootWindow(q->device->display, q->device->screen), 0, 0, &x, &y, &c);
+-	XClearWindow(q->device->display, q->target->drawable);
++	int x = 0, y = 0;
+ 
+ 	if (os->vs)
+ 		q->target->disp->set_video_layer(q->target->disp, x, y, clip_width, clip_height, os);
+diff -Nur a/vdpau_private.h b/vdpau_private.h
+--- a/vdpau_private.h	2016-02-16 14:12:22.000000000 +0100
++++ b/vdpau_private.h	2016-03-01 18:55:42.965127509 +0100
+@@ -28,7 +28,6 @@
+ #include <cedrus/cedrus.h>
+ #include <vdpau/vdpau.h>
+ #include <vdpau/vdpau_x11.h>
+-#include <X11/Xlib.h>
+ #include "sunxi_disp.h"
+ 
+ #define INTERNAL_YCBCR_FORMAT (VdpYCbCrFormat)0xffff
