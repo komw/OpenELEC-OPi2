@@ -1,14 +1,21 @@
 diff -Nur a/device.c b/device.c
 --- a/device.c	2016-02-16 14:12:22.000000000 +0100
-+++ b/device.c	2016-03-01 18:59:35.072517792 +0100
-@@ -35,13 +35,12 @@
++++ b/device.c	2016-03-02 17:55:02.296829873 +0100
+@@ -28,20 +28,16 @@
+                                     VdpDevice *device,
+                                     VdpGetProcAddress **get_proc_address)
+ {
+-	if (!display || !device || !get_proc_address)
++	if (!device || !get_proc_address)
+ 		return VDP_STATUS_INVALID_POINTER;
+ 
+ 	device_ctx_t *dev = handle_create(sizeof(*dev), device);
  	if (!dev)
  		return VDP_STATUS_RESOURCES;
  
 -	dev->display = XOpenDisplay(XDisplayString(display));
-+	dev->display = NULL;
- 	dev->screen = screen;
- 
+-	dev->screen = screen;
+-
  	dev->cedrus = cedrus_open();
  	if (!dev->cedrus)
  	{
@@ -16,7 +23,7 @@ diff -Nur a/device.c b/device.c
  		handle_destroy(*device);
  		return VDP_STATUS_ERROR;
  	}
-@@ -72,7 +71,6 @@
+@@ -72,7 +68,6 @@
  	if (dev->osd_enabled)
  		close(dev->g2d_fd);
  	cedrus_close(dev->cedrus);
@@ -38,16 +45,27 @@ diff -Nur a/Makefile b/Makefile
  DEP_CFLAGS = -MD -MP -MQ $@
 diff -Nur a/presentation_queue.c b/presentation_queue.c
 --- a/presentation_queue.c	2016-02-16 14:12:22.000000000 +0100
-+++ b/presentation_queue.c	2016-03-01 19:04:51.876704579 +0100
-@@ -53,7 +53,6 @@
++++ b/presentation_queue.c	2016-03-02 17:54:34.184323810 +0100
+@@ -41,7 +41,7 @@
+                                                    Drawable drawable,
+                                                    VdpPresentationQueueTarget *target)
+ {
+-	if (!target || !drawable)
++	if (!target)
+ 		return VDP_STATUS_INVALID_POINTER;
+ 
+ 	device_ctx_t *dev = handle_get(device);
+@@ -52,9 +52,6 @@
+ 	if (!qt)
  		return VDP_STATUS_RESOURCES;
  
- 	qt->drawable = drawable;
+-	qt->drawable = drawable;
 -	XSetWindowBackground(dev->display, drawable, 0x000102);
- 
+-
  	qt->disp = sunxi_disp_open(dev->osd_enabled);
  
-@@ -182,10 +181,7 @@
+ 	if (!qt->disp)
+@@ -182,10 +179,7 @@
  	if (earliest_presentation_time != 0)
  		VDPAU_DBG_ONCE("Presentation time not supported");
  
@@ -61,7 +79,7 @@ diff -Nur a/presentation_queue.c b/presentation_queue.c
  		q->target->disp->set_video_layer(q->target->disp, x, y, clip_width, clip_height, os);
 diff -Nur a/vdpau_private.h b/vdpau_private.h
 --- a/vdpau_private.h	2016-02-16 14:12:22.000000000 +0100
-+++ b/vdpau_private.h	2016-03-01 18:55:42.965127509 +0100
++++ b/vdpau_private.h	2016-03-02 17:53:51.567547732 +0100
 @@ -28,7 +28,6 @@
  #include <cedrus/cedrus.h>
  #include <vdpau/vdpau.h>
@@ -70,3 +88,20 @@ diff -Nur a/vdpau_private.h b/vdpau_private.h
  #include "sunxi_disp.h"
  
  #define INTERNAL_YCBCR_FORMAT (VdpYCbCrFormat)0xffff
+@@ -36,8 +35,6 @@
+ typedef struct
+ {
+ 	cedrus_t *cedrus;
+-	Display *display;
+-	int screen;
+ 	VdpPreemptionCallback *preemption_callback;
+ 	void *preemption_callback_context;
+ 	int fd;
+@@ -77,7 +74,6 @@
+ 
+ typedef struct
+ {
+-	Drawable drawable;
+ 	struct sunxi_disp *disp;
+ } queue_target_ctx_t;
+ 

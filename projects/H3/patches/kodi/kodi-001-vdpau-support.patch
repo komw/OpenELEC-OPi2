@@ -1,0 +1,548 @@
+diff -Nur a/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.cpp b/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.cpp
+--- a/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.cpp	2016-02-22 21:23:27.000000000 +0100
++++ b/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.cpp	2016-03-01 23:28:10.577172399 +0100
+@@ -100,6 +100,9 @@
+ {
+   m_context = 0;
+   m_refCount = 0;
++  m_vdpFlipTarget = VDP_INVALID_HANDLE;
++  m_vdpFlipQueue = VDP_INVALID_HANDLE;
++  m_vdpDevice = VDP_INVALID_HANDLE;
+ }
+ 
+ void CVDPAUContext::Release()
+@@ -199,17 +202,24 @@
+ {
+   CLog::Log(LOGNOTICE,"VDPAU::CreateContext - creating decoder context");
+ 
++#if HAS_X11
+   int mScreen;
+   { CSingleLock lock(g_graphicsContext);
+     if (!m_display)
+       m_display = XOpenDisplay(NULL);
+     mScreen = g_Windowing.GetCurrentScreen();
+   }
++#endif
+ 
+   VdpStatus vdp_st;
+   // Create Device
+-  vdp_st = dl_vdp_device_create_x11(m_display,
++  vdp_st = dl_vdp_device_create_x11(
++#if HAS_X11
++                                    m_display,
+                                     mScreen,
++#else
++                                    0, 0,
++#endif
+                                    &m_vdpDevice,
+                                    &m_vdpProcs.vdp_get_proc_address);
+ 
+@@ -223,6 +233,20 @@
+ 
+   QueryProcs();
+   SpewHardwareAvailable();
++  
++#ifndef HAS_GL
++  vdp_st = m_vdpProcs.vdp_presentation_queue_target_create_x11(m_vdpDevice, 0,
++        &m_vdpFlipTarget);
++  if (CheckStatus(vdp_st, __LINE__))
++     return false;
++  
++  vdp_st = m_vdpProcs.vdp_presentation_queue_create(m_vdpDevice,
++        m_vdpFlipTarget,
++        &m_vdpFlipQueue);
++  if (CheckStatus(vdp_st, __LINE__))
++     return false;
++#endif
++
+   return true;
+ }
+ 
+@@ -264,6 +288,14 @@
+   VDP_PROC(VDP_FUNC_ID_DECODER_DESTROY                     , m_vdpProcs.vdp_decoder_destroy);
+   VDP_PROC(VDP_FUNC_ID_DECODER_RENDER                      , m_vdpProcs.vdp_decoder_render);
+   VDP_PROC(VDP_FUNC_ID_DECODER_QUERY_CAPABILITIES          , m_vdpProcs.vdp_decoder_query_caps);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_CREATE           , m_vdpProcs.vdp_presentation_queue_create);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_DESTROY          , m_vdpProcs.vdp_presentation_queue_destroy);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_DISPLAY          , m_vdpProcs.vdp_presentation_queue_display);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_BLOCK_UNTIL_SURFACE_IDLE, m_vdpProcs.vdp_presentation_queue_block_until_surface_idle);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_TARGET_CREATE_X11, m_vdpProcs.vdp_presentation_queue_target_create_x11);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_QUERY_SURFACE_STATUS, m_vdpProcs.vdp_presentation_queue_query_surface_status);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_GET_TIME         , m_vdpProcs.vdp_presentation_queue_get_time);
++  VDP_PROC(VDP_FUNC_ID_PRESENTATION_QUEUE_TARGET_DESTROY   , m_vdpProcs.vdp_presentation_queue_target_destroy);
+ #undef VDP_PROC
+ }
+ 
+@@ -272,13 +304,37 @@
+   return m_vdpDevice;
+ }
+ 
++bool CVDPAUContext::CheckStatus(VdpStatus vdp_st, int line)
++{
++  if (vdp_st != VDP_STATUS_OK)
++  {
++    CLog::Log(LOGERROR, " (VDPAU) Error: %s(%d) at %s:%d\n", m_vdpProcs.vdp_get_error_string(vdp_st), vdp_st, __FILE__, line);
++    return true;
++  }
++  return false;
++}
++
+ void CVDPAUContext::DestroyContext()
+ {
+-  if (!m_vdpProcs.vdp_device_destroy)
+-    return;
++  VdpStatus vdp_st;
++  
++  if (m_vdpDevice != VDP_INVALID_HANDLE)
++  {
++     m_vdpProcs.vdp_device_destroy(m_vdpDevice);
++     m_vdpDevice = VDP_INVALID_HANDLE;
++  }
++  
++  if (m_vdpFlipQueue != VDP_INVALID_HANDLE)
++  {
++     vdp_st = m_vdpProcs.vdp_presentation_queue_destroy(m_vdpFlipQueue);
++     m_vdpFlipQueue = VDP_INVALID_HANDLE;
++  }
+ 
+-  m_vdpProcs.vdp_device_destroy(m_vdpDevice);
+-  m_vdpDevice = VDP_INVALID_HANDLE;
++  if (m_vdpFlipTarget != VDP_INVALID_HANDLE)
++  {
++     vdp_st = m_vdpProcs.vdp_presentation_queue_target_destroy(m_vdpFlipTarget);
++     m_vdpFlipTarget = VDP_INVALID_HANDLE;
++  }
+ }
+ 
+ void CVDPAUContext::SpewHardwareAvailable()  //CopyrighVDPAUt (c) 2008 Wladimir J. van der Laan  -- VDPInfo
+@@ -498,15 +554,13 @@
+       return false;
+   }
+ 
+-#ifndef GL_NV_vdpau_interop
+-  CLog::Log(LOGNOTICE, "VDPAU: compilation without required extension GL_NV_vdpau_interop");
+-  return false;
+-#endif
++#ifdef GL_NV_vdpau_interop
+   if (!g_Windowing.IsExtSupported("GL_NV_vdpau_interop"))
+   {
+     CLog::Log(LOGNOTICE, "VDPAU::Open: required extension GL_NV_vdpau_interop not found");
+     return false;
+   }
++#endif
+ 
+   if(avctx->coded_width  == 0
+   || avctx->coded_height == 0)
+@@ -1077,6 +1131,25 @@
+   return 0;
+ }
+ 
++void CDecoder::Present(uint32_t surface)
++{
++  CLog::Log(LOGNOTICE,"CDecode::%s sourceIdx=%d",__FUNCTION__, surface);
++  VdpStatus vdp_st;
++
++#if 0
++  CSingleLock lock(m_DecoderSection);
++   { CSharedLock dLock(m_DisplaySection);
++   if (m_DisplayState != VDPAU_OPEN)
++      return;
++   }
++#endif
++  vdp_st = m_vdpauConfig.context->GetProcs().vdp_presentation_queue_display(m_vdpauConfig.context->m_vdpFlipQueue,
++                                           surface,
++                                           0,
++                                           0,
++                                           0);
++  CheckStatus(vdp_st, __LINE__);
++}
+ 
+ int CDecoder::Decode(AVCodecContext *avctx, AVFrame *pFrame)
+ {
+@@ -3581,6 +3654,7 @@
+ 
+ bool COutput::CreateGlxContext()
+ {
++#if HAS_X11
+   GLXContext   glContext;
+ 
+   m_Display = g_Windowing.GetDisplay();
+@@ -3631,6 +3705,7 @@
+     CLog::Log(LOGINFO, "VDPAU::COutput::CreateGlxContext - Could not make Pixmap current");
+     return false;
+   }
++#endif
+ 
+   CLog::Log(LOGNOTICE, "VDPAU::COutput::CreateGlxContext - created context");
+   return true;
+@@ -3638,6 +3713,7 @@
+ 
+ bool COutput::DestroyGlxContext()
+ {
++#if HAS_X11
+   if (m_glContext)
+   {
+     glXMakeCurrent(m_Display, None, NULL);
+@@ -3652,6 +3728,7 @@
+   if (m_pixmap)
+     XFreePixmap(m_Display, m_pixmap);
+   m_pixmap = 0;
++#endif
+ 
+   return true;
+ }
+diff -Nur a/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.h b/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.h
+--- a/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.h	2016-02-22 21:23:27.000000000 +0100
++++ b/xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.h	2016-03-01 23:17:55.420495456 +0100
+@@ -42,10 +42,12 @@
+ 
+ #include "DVDVideoCodec.h"
+ #include "DVDVideoCodecFFmpeg.h"
++#ifdef HAVE_X11
+ #include <X11/Xlib.h>
+ #include <X11/Xutil.h>
+ #define GLX_GLXEXT_PROTOTYPES
+ #include <GL/glx.h>
++#endif
+ 
+ #include "DVDVideoCodec.h"
+ #include "DVDVideoCodecFFmpeg.h"
+@@ -67,6 +69,11 @@
+ #define FULLHD_WIDTH                       1920
+ #define MAX_PIC_Q_LENGTH                   20 //for non-interop_yuv this controls the max length of the decoded pic to render completion Q
+ 
++#ifndef HAVE_X11
++typedef void *Display;
++typedef void *Window;
++#endif
++
+ namespace VDPAU
+ {
+ 
+@@ -110,6 +117,15 @@
+   VdpDecoderQueryCapabilities *  vdp_decoder_query_caps;
+ 
+   VdpPreemptionCallbackRegister * vdp_preemption_callback_register;
++  
++  VdpPresentationQueueTargetDestroy *           vdp_presentation_queue_target_destroy;
++  VdpPresentationQueueCreate *                  vdp_presentation_queue_create;
++  VdpPresentationQueueDestroy *                 vdp_presentation_queue_destroy;
++  VdpPresentationQueueDisplay *                 vdp_presentation_queue_display;
++  VdpPresentationQueueBlockUntilSurfaceIdle *   vdp_presentation_queue_block_until_surface_idle;
++  VdpPresentationQueueTargetCreateX11 *         vdp_presentation_queue_target_create_x11;
++  VdpPresentationQueueQuerySurfaceStatus *      vdp_presentation_queue_query_surface_status;
++  VdpPresentationQueueGetTime *                 vdp_presentation_queue_get_time;
+ 
+ };
+ 
+@@ -214,7 +230,11 @@
+   friend class COutput;
+ public:
+   CVdpauRenderPicture(CCriticalSection &section)
+-    : refCount(0), renderPicSection(section) { fence = None; }
++    : refCount(0), renderPicSection(section) {
++#if HAS_GL
++      fence = None; 
++#endif      
++    }
+   void Sync();
+   DVDVideoPicture DVDPic;
+   int texWidth, texHeight;
+@@ -228,7 +248,9 @@
+ private:
+   void ReturnUnused();
+   bool usefence;
++#if HAS_GL
+   GLsync fence;
++#endif
+   int refCount;
+   CCriticalSection &renderPicSection;
+ };
+@@ -459,10 +481,12 @@
+   CMixer m_mixer;
+   Display *m_Display;
+   Window m_Window;
++#if HAS_GL
+   GLXContext m_glContext;
+   GLXWindow m_glWindow;
+   Pixmap    m_pixmap;
+   GLXPixmap m_glPixmap;
++#endif
+ 
+   // gl functions
+ #ifdef GL_NV_vdpau_interop
+@@ -515,6 +539,9 @@
+   bool Supports(VdpVideoMixerFeature feature);
+   VdpVideoMixerFeature* GetFeatures();
+   int GetFeatureCount();
++  
++  VdpPresentationQueueTarget   m_vdpFlipTarget;
++  VdpPresentationQueue         m_vdpFlipQueue;
+ private:
+   CVDPAUContext();
+   void Close();
+@@ -523,6 +550,7 @@
+   void DestroyContext();
+   void QueryProcs();
+   void SpewHardwareAvailable();
++  bool CheckStatus(VdpStatus vdp_st, int line);
+   static CVDPAUContext *m_context;
+   static CCriticalSection m_section;
+   static Display *m_display;
+@@ -567,6 +595,8 @@
+ 
+   virtual int  Check(AVCodecContext* avctx);
+   virtual const std::string Name() { return "vdpau"; }
++  
++  void Present(uint32_t surface);
+ 
+   bool Supports(VdpVideoMixerFeature feature);
+   bool Supports(EINTERLACEMETHOD method);
+diff -Nur a/xbmc/cores/VideoRenderers/LinuxRendererGLES.cpp b/xbmc/cores/VideoRenderers/LinuxRendererGLES.cpp
+--- a/xbmc/cores/VideoRenderers/LinuxRendererGLES.cpp	2016-02-22 21:23:27.000000000 +0100
++++ b/xbmc/cores/VideoRenderers/LinuxRendererGLES.cpp	2016-03-01 23:24:03.641228376 +0100
+@@ -116,6 +116,9 @@
+ #ifdef HAS_IMXVPU
+   IMXBuffer = NULL;
+ #endif
++#ifdef HAVE_LIBVDPAU
++  vdpau = NULL;
++#endif
+ }
+ 
+ CLinuxRendererGLES::YUVBUFFER::~YUVBUFFER()
+@@ -312,6 +315,13 @@
+   }
+ #endif
+ 
++#ifdef HAVE_LIBVDPAU
++  if(m_renderMethod & RENDER_VDPAU)
++  {
++    return source;
++  }
++#endif
++
+   YV12Image &im = m_buffers[source].image;
+ 
+   if ((im.flags&(~IMAGE_FLAG_READY)) != 0)
+@@ -733,6 +743,44 @@
+ #endif
+   }
+ #endif
++#ifdef HAVE_LIBVDPAU
++  else if (m_renderMethod & RENDER_VDPAU)
++  {
++    VDPAU::CVdpauRenderPicture *buffer = m_buffers[m_iYV12RenderBuffer].vdpau;
++    if (buffer != NULL && buffer->valid)
++    {
++      // this hack is needed to get the 2D mode of a 3D movie going
++      RENDER_STEREO_MODE stereo_mode = g_graphicsContext.GetStereoMode();
++      if (stereo_mode)
++        g_graphicsContext.SetStereoView(RENDER_STEREO_VIEW_LEFT);
++
++      ManageDisplay();
++
++      if (stereo_mode)
++        g_graphicsContext.SetStereoView(RENDER_STEREO_VIEW_OFF);
++
++      CRect dstRect(m_destRect);
++      CRect srcRect(m_sourceRect);
++      switch (stereo_mode)
++      {
++        case RENDER_STEREO_MODE_SPLIT_HORIZONTAL:
++          dstRect.y2 *= 2.0;
++          srcRect.y2 *= 2.0;
++        break;
++
++        case RENDER_STEREO_MODE_SPLIT_VERTICAL:
++          dstRect.x2 *= 2.0;
++          srcRect.x2 *= 2.0;
++        break;
++
++        default:
++        break;
++      }
++      
++      buffer->vdpau->Present(buffer->sourceIdx);
++    }
++  }
++#endif
+ }
+ 
+ void CLinuxRendererGLES::FlipPage(int source)
+@@ -906,6 +954,12 @@
+         m_renderMethod = RENDER_CVREF;
+         break;
+       }
++      else if (m_format == RENDER_FMT_VDPAU)
++      {
++        CLog::Log(LOGNOTICE, "GL: Using VDPAU render method");
++        m_renderMethod = RENDER_VDPAU;
++        break;
++      }
+       #if defined(TARGET_DARWIN_IOS)
+       else if (ios_version < 5.0 && m_format == RENDER_FMT_YUV420P)
+       {
+@@ -998,7 +1052,13 @@
+     m_textureCreate = &CLinuxRendererGLES::CreateOpenMaxTexture;
+     m_textureDelete = &CLinuxRendererGLES::DeleteOpenMaxTexture;
+   }
+-   else
++  else if (m_format == RENDER_FMT_VDPAU)
++  {
++    m_textureUpload = &CLinuxRendererGLES::UploadVDPAUTexture;
++    m_textureCreate = &CLinuxRendererGLES::CreateVDPAUTexture;
++    m_textureDelete = &CLinuxRendererGLES::DeleteVDPAUTexture;
++  }
++  else
+   {
+     // default to YV12 texture handlers
+     m_textureUpload = &CLinuxRendererGLES::UploadYV12Texture;
+@@ -1110,6 +1170,10 @@
+   if (m_renderMethod & RENDER_IMXMAP)
+     SAFE_RELEASE(buf.IMXBuffer);
+ #endif
++#ifdef HAVE_LIBVDPAU
++  if (m_renderMethod & RENDER_VDPAU)
++    SAFE_RELEASE(buf.vdpau);
++#endif
+ }
+ 
+ void CLinuxRendererGLES::Render(DWORD flags, int index)
+@@ -2890,6 +2954,27 @@
+   return true;
+ }
+ 
++//********************************************************************************************************
++// VDPAU creation, deletion, copying + clearing
++//********************************************************************************************************
++void CLinuxRendererGLES::UploadVDPAUTexture(int index)
++{
++}
++
++void CLinuxRendererGLES::DeleteVDPAUTexture(int index)
++{
++#ifdef HAVE_LIBVDPAU
++  SAFE_RELEASE(m_buffers[index].vdpau);
++#endif
++}
++
++bool CLinuxRendererGLES::CreateVDPAUTexture(int index)
++{
++#ifdef HAVE_LIBVDPAU
++  m_buffers[index].vdpau = 0;
++#endif
++  return true;
++}
+ 
+ bool CLinuxRendererGLES::Supports(ERENDERFEATURE feature)
+ {
+@@ -3008,6 +3093,16 @@
+     else
+       return false;
+   }
++  
++  if(m_renderMethod & RENDER_VDPAU)
++  {
++#ifdef HAVE_LIBVDPAU
++    VDPAU::CVdpauRenderPicture *vdpauPic = m_buffers[m_iYV12RenderBuffer].vdpau;
++    if(vdpauPic && vdpauPic->vdpau)
++       return vdpauPic->vdpau->Supports(method);
++#endif
++    return false;
++  }
+ 
+ #if !defined(TARGET_ANDROID) && (defined(__i386__) || defined(__x86_64__))
+   if(method == VS_INTERLACEMETHOD_DEINTERLACE
+@@ -3073,6 +3168,9 @@
+ 
+   if(m_renderMethod & RENDER_IMXMAP)
+     return VS_INTERLACEMETHOD_IMX_FASTMOTION;
++  
++  if(m_renderMethod & RENDER_VDPAU)
++    return VS_INTERLACEMETHOD_NONE;
+ 
+ #if !defined(TARGET_ANDROID) && (defined(__i386__) || defined(__x86_64__))
+   return VS_INTERLACEMETHOD_DEINTERLACE_HALF;
+@@ -3090,7 +3188,8 @@
+      m_format == RENDER_FMT_CVBREF ||
+      m_format == RENDER_FMT_EGLIMG ||
+      m_format == RENDER_FMT_MEDIACODEC ||
+-    m_format == RENDER_FMT_MEDIACODECSURFACE)
++     m_format == RENDER_FMT_MEDIACODECSURFACE ||
++     m_format == RENDER_FMT_VDPAU)
+     info.optimal_buffer_size = 2;
+   else if(m_format == RENDER_FMT_IMXMAP)
+   {
+@@ -3187,9 +3286,20 @@
+ }
+ #endif
+ 
++#ifdef HAVE_LIBVDPAU
++void CLinuxRendererGLES::AddProcessor(VDPAU::CVdpauRenderPicture* vdpau, int index)
++{
++  YUVBUFFER &buf = m_buffers[index];
++  VDPAU::CVdpauRenderPicture *pic = vdpau->Acquire();
++  SAFE_RELEASE(buf.vdpau);
++  buf.vdpau = pic;
++}
++#endif
++
+ bool CLinuxRendererGLES::IsGuiLayer()
+ {
+-  if (m_format == RENDER_FMT_BYPASS || m_format == RENDER_FMT_IMXMAP || m_format == RENDER_FMT_MEDIACODECSURFACE)
++  if (m_format == RENDER_FMT_BYPASS || m_format == RENDER_FMT_IMXMAP ||
++      m_format == RENDER_FMT_MEDIACODECSURFACE || m_format == RENDER_FMT_VDPAU)
+     return false;
+   else
+     return true;
+diff -Nur a/xbmc/cores/VideoRenderers/LinuxRendererGLES.h b/xbmc/cores/VideoRenderers/LinuxRendererGLES.h
+--- a/xbmc/cores/VideoRenderers/LinuxRendererGLES.h	2016-02-22 21:23:27.000000000 +0100
++++ b/xbmc/cores/VideoRenderers/LinuxRendererGLES.h	2016-03-01 20:56:02.329770386 +0100
+@@ -33,6 +33,7 @@
+ #include "guilib/GraphicContext.h"
+ #include "BaseRenderer.h"
+ #include "xbmc/cores/dvdplayer/DVDCodecs/Video/DVDVideoCodec.h"
++#include "xbmc/cores/dvdplayer/DVDCodecs/Video/VDPAU.h"
+ 
+ class CRenderCapture;
+ 
+@@ -87,6 +88,7 @@
+ {
+   RENDER_GLSL   = 0x001,
+   RENDER_SW     = 0x004,
++  RENDER_VDPAU  = 0x008,
+   RENDER_POT    = 0x010,
+   RENDER_OMXEGL = 0x040,
+   RENDER_CVREF  = 0x080,
+@@ -177,6 +179,9 @@
+ #ifdef HAS_IMXVPU
+   virtual void         AddProcessor(CDVDVideoCodecIMXBuffer *codecinfo, int index);
+ #endif
++#ifdef HAVE_LIBVDPAU
++  virtual void         AddProcessor(VDPAU::CVdpauRenderPicture* vdpau, int index);
++#endif
+ 
+ protected:
+   virtual void Render(DWORD flags, int index);
+@@ -225,6 +230,10 @@
+   void UploadIMXMAPTexture(int index);
+   void DeleteIMXMAPTexture(int index);
+   bool CreateIMXMAPTexture(int index);
++  
++  void UploadVDPAUTexture(int index);
++  void DeleteVDPAUTexture(int index);
++  bool CreateVDPAUTexture(int index);
+ 
+   void CalculateTextureSourceRects(int source, int num_planes);
+ 
+@@ -306,6 +315,9 @@
+ #ifdef HAS_IMXVPU
+     CDVDVideoCodecIMXBuffer *IMXBuffer;
+ #endif
++#ifdef HAVE_LIBVDPAU
++    VDPAU::CVdpauRenderPicture *vdpau;
++#endif
+   };
+ 
+   typedef YUVBUFFER          YUVBUFFERS[NUM_BUFFERS];

@@ -1,0 +1,123 @@
+diff -Nur a/configure.ac b/configure.ac
+--- a/configure.ac	2015-03-11 00:24:26.000000000 +0100
++++ b/configure.ac	2016-03-02 18:21:18.753996448 +0100
+@@ -6,9 +6,8 @@
+ AC_PROG_CXX
+ AC_PROG_INSTALL
+ 
+-PKG_CHECK_MODULES(VDPAU, x11 [vdpau >= 1.0])
+ VDPAUINFO_CXXFLAGS="$VDPAUINFO_CXXFLAGS $VDPAU_CFLAGS"
+-VDPAUINFO_LIBS="$VDPAUINFO_LIBS $VDPAU_LIBS"
++VDPAUINFO_LIBS="$VDPAUINFO_LIBS -lvdpau"
+ 
+ AC_SUBST(VDPAUINFO_CXXFLAGS)
+ AC_SUBST(VDPAUINFO_LIBS)
+diff -Nur a/vdpauinfo.cpp b/vdpauinfo.cpp
+--- a/vdpauinfo.cpp	2015-03-09 22:44:02.000000000 +0100
++++ b/vdpauinfo.cpp	2016-03-02 18:01:23.639345148 +0100
+@@ -388,104 +388,13 @@
+     }
+ }
+ 
+-static void usage(const char *argv0) _X_NORETURN;
+-static void usage(const char *argv0)
+-{
+-    printf("Usage: %s [--display displayname] [--screen screen_number]\n", argv0);
+-    printf("  --display displayname     Server to query\n");
+-    printf("  --screen screen_number    X screen to query\n");
+-    printf("  --help                    Print this help text\n");
+-    exit(0);
+-}
+-
+-static void invalid_argument(const char *argv0, const char *fmt, ...) _X_ATTRIBUTE_PRINTF(2, 3) _X_NORETURN;
+-static void invalid_argument(const char *argv0, const char *fmt, ...)
+-{
+-    va_list ap;
+-    va_start(ap, fmt);
+-
+-    fprintf(stderr, "%s: ", argv0);
+-    vfprintf(stderr, fmt, ap);
+-    fprintf(stderr, "Try '%s --help' for more information.\n", argv0);
+-
+-    va_end(ap);
+-    exit(-1);
+-}
+-
+-struct Options {
+-    char *display_name;
+-    int screen;
+-};
+-
+-static struct Options parse_options(int argc, char **argv)
+-{
+-    struct Options o;
+-
+-    o.display_name = XDisplayName(NULL);
+-    o.screen = -1;
+-
+-    for(int i = 1; i < argc;)
+-    {
+-        const char *arg = argv[i++];
+-
+-        if(strcmp(arg, "--display") == 0)
+-        {
+-            if(i >= argc)
+-                invalid_argument(argv[0], "--display requires an argument\n");
+-            o.display_name = XDisplayName(argv[i++]);
+-        }
+-        else if(strcmp(arg, "--screen") == 0)
+-        {
+-            if(i >= argc)
+-                invalid_argument(argv[0], "--screen requires an argument\n");
+-
+-            char *end;
+-            o.screen = strtol(argv[i], &end, 0);
+-            if(end == argv[i] || *end != '\0')
+-                invalid_argument(argv[0], "could not parse '%s' as a number\n", argv[i]);
+-            if(o.screen < 0)
+-                invalid_argument(argv[0], "--screen argument cannot be negative\n");
+-            i++;
+-        }
+-        else if(strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
+-        {
+-            usage(argv[0]);
+-        }
+-        else
+-        {
+-            invalid_argument(argv[0], "unrecognized option '%s'\n", arg);
+-        }
+-    }
+-
+-    return o;
+-}
+-
+ int main(int argc, char **argv)
+ {
+-    /* Parse options */
+-    struct Options o = parse_options(argc, argv);
+-
+-    /* Create an X Display */
+-    Display *display = XOpenDisplay(o.display_name);
+-    if(!display)
+-    {
+-        fprintf(stderr,"%s: cannot connect to X server %s\n", argv[0],
+-                o.display_name);
+-        exit(-1);
+-    }
+-
+-    int screen = (o.screen == -1) ? DefaultScreen(display) : o.screen;
+-    if(screen >= ScreenCount(display))
+-        invalid_argument(argv[0], "screen %d requested but X server only has %d screen%s\n",
+-                         screen, ScreenCount(display),
+-                         ScreenCount(display) == 1 ? "" : "s");
+-    printf("display: %s   screen: %i\n", o.display_name, screen);
+-
+     /* Create device */
+     VdpDevice device;
+     VdpGetProcAddress *get_proc_address;
+     VdpStatus rv;
+-    rv = vdp_device_create_x11(display, screen, &device, &get_proc_address);
++    rv = vdp_device_create_x11(0, 0, &device, &get_proc_address);
+     if(rv != VDP_STATUS_OK)
+     {
+         fprintf(stderr, "Error creating VDPAU device: %i\n", rv); /* cannot use GetErrorString here */

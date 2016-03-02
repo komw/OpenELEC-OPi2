@@ -105,6 +105,8 @@
 
   # KODI Player implementation to use (default / bcm2835-driver / libfslvpuwrap)
     KODIPLAYER_DRIVER=""
+    
+    VDPAU_SUPPORT="yes"
 
   # Modules to install in initramfs for early boot
     INITRAMFS_MODULES=""
@@ -133,4 +135,4 @@
     INSTALLER_SUPPORT="no"
 
   # additional drivers
-    ADDITIONAL_DRIVERS+=" media_build"
+    ADDITIONAL_DRIVERS+=" libvdpau-sunxi media_build"
