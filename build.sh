@@ -1,0 +1,1 @@
+sudo PROJECT=H3 DEVICE=OPiPC ARCH=arm make image
